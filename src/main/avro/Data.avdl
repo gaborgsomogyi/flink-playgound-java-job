@@ -1,0 +1,7 @@
+@namespace("com.apple.flink.avro")
+protocol Protocol {
+  record Data {
+    string word;
+    int sleepMs;
+  }
+}

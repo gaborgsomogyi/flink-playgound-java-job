@@ -60,3 +60,4 @@ spec:
     upgradeMode: savepoint
     state: running
     savepointTriggerNonce: 0
+#    initialSavepointPath: file:/flink-data/savepoints/savepoint-58c027-67f114779065

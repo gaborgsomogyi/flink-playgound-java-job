@@ -18,8 +18,11 @@
 package com.apple.flink;
 
 import org.apache.flink.connector.datagen.table.DataGenConnectorOptions;
+import org.apache.flink.streaming.api.datastream.AsyncDataStream;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.async.ResultFuture;
+import org.apache.flink.streaming.api.functions.async.RichAsyncFunction;
 import org.apache.flink.streaming.api.functions.source.datagen.DataGeneratorSource;
 import org.apache.flink.streaming.api.functions.source.datagen.RandomGenerator;
 import org.apache.flink.table.api.DataTypes;
@@ -29,6 +32,7 @@ import org.apache.flink.table.api.Table;
 import org.apache.flink.table.api.TableDescriptor;
 import org.apache.flink.table.api.TableEnvironment;
 
+import com.apple.flink.avro.Data;
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.DefaultParser;
@@ -37,6 +41,11 @@ import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.Collections;
+import java.util.Random;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.flink.table.api.Expressions.$;
 
@@ -65,18 +74,48 @@ public class FlinkPlaygroundJavaJob {
         LOG.info("Existing playground job");
     }
 
+    static class AsyncEnrichmentRequest extends RichAsyncFunction<Data, Data> {
+        private final Random random = new Random();
+
+        @Override
+        public void asyncInvoke(Data data, final ResultFuture<Data> resultFuture) {
+            CompletableFuture.supplyAsync(
+                            () -> {
+                                try {
+                                    int sleepMs = 1000 + random.nextInt(1000);
+                                    LOG.info("Data: {} sleep({})", data, sleepMs);
+                                    Thread.sleep(sleepMs);
+                                    data.setSleepMs(sleepMs);
+                                    LOG.info("Data: {} complete", data);
+                                    return data;
+                                } catch (InterruptedException e) {
+                                    return null;
+                                }
+                            })
+                    .thenAccept((Data d) -> resultFuture.complete(Collections.singleton(d)));
+        }
+    }
+
     private static void mainWithStreamingAPI(CommandLine commandLine) throws Exception {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 
         DataStream<String> stream =
                 env.addSource(
                                 new DataGeneratorSource<>(
-                                        RandomGenerator.stringGenerator(8), 1, null))
+                                        RandomGenerator.stringGenerator(8), 4, null))
                         .returns(String.class)
                         .uid("datagen-source-uid")
                         .name("datagen-source");
 
-        stream.print().uid("print-sink-uid").name("print-sink");
+        DataStream<Data> dataStream = stream.map(v -> new Data(v, 0)).returns(Data.class);
+        AsyncDataStream.unorderedWait(
+                        dataStream, new AsyncEnrichmentRequest(), 3, TimeUnit.SECONDS, 256)
+                .uid("enrichment-uid")
+                .name("enrichment")
+                .print()
+                .uid("print-sink-uid")
+                .name("print-sink");
+
         env.execute("playground");
     }
 
